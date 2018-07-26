@@ -479,6 +479,7 @@ class FrameworkExtension extends Extension
 
         foreach ($config['workflows'] as $name => $workflow) {
             $type = $workflow['type'];
+            $workflowId = sprintf('%s.%s', $type, $name);
 
             // Process Metadata (workflow + places (transition is done in the "create transition" block))
             $metadataStoreDefinition = new Definition(Workflow\Metadata\InMemoryMetadataStore::class, array(array(), array(), null));
@@ -499,10 +500,14 @@ class FrameworkExtension extends Extension
             $transitions = array();
             $guardsConfiguration = array();
             $transitionsMetadataDefinition = new Definition(\SplObjectStorage::class);
-            foreach ($workflow['transitions'] as $transition) {
+            // Global transition counter per workflow
+            $transitionCounter = 0;
+            foreach (array_values($workflow['transitions']) as $number => $transition) {
                 if ('workflow' === $type) {
                     $transitionDefinition = new Definition(Workflow\Transition::class, array($transition['name'], $transition['from'], $transition['to']));
-                    $transitions[] = $transitionDefinition;
+                    $transitionId = sprintf('%s.transition.%s', $workflowId, $transitionCounter++);
+                    $container->setDefinition($transitionId, $transitionDefinition);
+                    $transitions[] = new Reference($transitionId);
                     if ($transition['metadata']) {
                         $transitionsMetadataDefinition->addMethodCall('attach', array(
                             $transitionDefinition,
@@ -511,19 +516,18 @@ class FrameworkExtension extends Extension
                     }
                     if (isset($transition['guard'])) {
                         $configuration =  new Definition(Workflow\EventListener\GuardExpression::class);
-                        $configuration->addArgument($transitionDefinition);
+                        $configuration->addArgument(new Reference($transitionId));
                         $configuration->addArgument($transition['guard']);
                         $eventName = sprintf('workflow.%s.guard.%s', $name, $transition['name']);
-                        if (!isset($guardsConfiguration[$eventName])) {
-                            $guardsConfiguration[$eventName] = array();
-                        }
                         $guardsConfiguration[$eventName][] = $configuration;
                     }
                 } elseif ('state_machine' === $type) {
-                    foreach ($transition['from'] as $from) {
-                        foreach ($transition['to'] as $to) {
+                    foreach ($transition['from'] as $keyFrom => $from) {
+                        foreach ($transition['to'] as $keyTo => $to) {
                             $transitionDefinition = new Definition(Workflow\Transition::class, array($transition['name'], $from, $to));
-                            $transitions[] = $transitionDefinition;
+                            $transitionId = sprintf('%s.transition.%s', $workflowId, $transitionCounter++);
+                            $container->setDefinition($transitionId, $transitionDefinition);
+                            $transitions[] = new Reference($transitionId);
                             if ($transition['metadata']) {
                                 $transitionsMetadataDefinition->addMethodCall('attach', array(
                                     $transitionDefinition,
@@ -531,13 +535,10 @@ class FrameworkExtension extends Extension
                                 ));
                             }
                             if (isset($transition['guard'])) {
-                                $configuration =  new Definition(Workflow\EventListener\GuardExpression::class);
-                                $configuration->addArgument($transitionDefinition);
+                                $configuration = new Definition(Workflow\EventListener\GuardExpression::class);
+                                $configuration->addArgument(new Reference($transitionId));
                                 $configuration->addArgument($transition['guard']);
                                 $eventName = sprintf('workflow.%s.guard.%s', $name, $transition['name']);
-                                if (!isset($guardsConfiguration[$eventName])) {
-                                    $guardsConfiguration[$eventName] = array();
-                                }
                                 $guardsConfiguration[$eventName][] = $configuration;
                             }
                         }
@@ -550,7 +551,6 @@ class FrameworkExtension extends Extension
             $places = array_map(function (array $place) {
                 return $place['name'];
             }, $workflow['places']);
-
             // Create a Definition
             $definitionDefinition = new Definition(Workflow\Definition::class);
             $definitionDefinition->setPublic(false);
@@ -575,7 +575,7 @@ class FrameworkExtension extends Extension
             }
 
             // Create Workflow
-            $workflowId = sprintf('%s.%s', $type, $name);
+
             $workflowDefinition = new ChildDefinition(sprintf('%s.abstract', $type));
             $workflowDefinition->replaceArgument(0, new Reference(sprintf('%s.definition', $workflowId)));
             if (isset($markingStoreDefinition)) {
